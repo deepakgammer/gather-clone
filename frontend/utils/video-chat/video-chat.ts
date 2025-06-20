@@ -21,23 +21,32 @@ export class VoiceChat {
   private currentChannel = ''
   private remoteUsers: Record<string, IAgoraRTCRemoteUser> = {}
   private channelTimeout: NodeJS.Timeout | null = null
+  private AgoraRTC: any
 
   constructor() {
     if (typeof window === 'undefined') return
 
-    const AgoraRTC = require('agora-rtc-sdk-ng')
-    this.client = AgoraRTC.createClient({ codec: 'vp8', mode: 'rtc' })
-    AgoraRTC.setLogLevel(4)
+    this.AgoraRTC = require('agora-rtc-sdk-ng')
+    this.client = this.AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' })
+    this.AgoraRTC.setLogLevel(4)
 
+    this.setupEventListeners()
+  }
+
+  private setupEventListeners() {
     this.client.on('user-published', this.onUserPublished)
     this.client.on('user-unpublished', this.onUserUnpublished)
     this.client.on('user-left', this.onUserLeft)
     this.client.on('user-info-updated', this.onUserInfoUpdated)
     this.client.on('user-joined', this.onUserJoined)
+    this.client.on('token-privilege-will-expire', this.onTokenWillExpire)
+    this.client.on('token-privilege-did-expire', this.onTokenExpired)
   }
 
   private onUserInfoUpdated = (uid: string) => {
-    if (this.remoteUsers[uid]) signal.emit('user-info-updated', this.remoteUsers[uid])
+    if (this.remoteUsers[uid]) {
+      signal.emit('user-info-updated', this.remoteUsers[uid])
+    }
   }
 
   private onUserJoined = (user: IAgoraRTCRemoteUser) => {
@@ -49,130 +58,219 @@ export class VoiceChat {
   private onUserPublished = async (
     user: IAgoraRTCRemoteUser,
     mediaType: 'audio' | 'video' | 'datachannel',
-    _cfg?: IDataChannelConfig,
   ) => {
     console.log('📡 User published:', user.uid, mediaType)
-    if (mediaType !== 'audio') return
-
-    this.remoteUsers[user.uid] = user
-    await this.client.subscribe(user, mediaType)
-    console.log('🔊 Subscribed to audio from:', user.uid)
-
-    if (user.audioTrack) {
-      user.audioTrack.play()
-      console.log('▶️ Playing audio track')
-    } else {
-      console.warn('❌ No audioTrack found for user', user.uid)
+    
+    try {
+      await this.client.subscribe(user, mediaType)
+      
+      if (mediaType === 'audio' && user.audioTrack) {
+        this.remoteUsers[user.uid] = user
+        user.audioTrack.play()
+        console.log('🔊 Playing remote audio track for user:', user.uid)
+      }
+      
+      signal.emit('user-info-updated', user)
+    } catch (error) {
+      console.error('❌ Error subscribing to user:', error)
     }
-
-    signal.emit('user-info-updated', user)
   }
 
   private onUserUnpublished = (user: IAgoraRTCRemoteUser, mediaType: 'audio' | 'video' | 'datachannel') => {
-    if (mediaType === 'audio') user.audioTrack?.stop()
+    console.log('📡 User unpublished:', user.uid, mediaType)
+    if (mediaType === 'audio' && user.audioTrack) {
+      user.audioTrack.stop()
+    }
   }
 
   private onUserLeft = (user: IAgoraRTCRemoteUser) => {
+    console.log('👋 User left:', user.uid)
     delete this.remoteUsers[user.uid]
     signal.emit('user-left', user)
   }
 
-  /** Toggle mic mute/unmute */
-  public async toggleMicrophone() {
-  const AgoraRTC = typeof window !== 'undefined' ? require('agora-rtc-sdk-ng') : null
-  if (!AgoraRTC) return true
-
-  try {
-    if (!this.micTrack) {
-      this.micTrack = await AgoraRTC.createMicrophoneAudioTrack()
-      console.log('✅ Mic track created:', this.micTrack)
-
-      // ❌ DO NOT PLAY micTrack LOCALLY
-      // this.micTrack.play() ← REMOVE THIS LINE
-
-      if (this.client.connectionState === 'CONNECTED') {
-        await this.client.publish([this.micTrack as ILocalTrack])
-        console.log('✅ Mic published to channel')
+  private onTokenWillExpire = async () => {
+    console.log('🔄 Token will expire soon')
+    if (!this.currentChannel) return
+    
+    try {
+      const token = await generateToken(this.currentChannel)
+      if (token) {
+        await this.client.renewToken(token)
+        console.log('✅ Token renewed successfully')
       }
-      return false // unmuted
+    } catch (error) {
+      console.error('❌ Failed to renew token:', error)
+    }
+  }
+
+  private onTokenExpired = async () => {
+    console.log('⚠️ Token expired')
+    if (this.currentChannel) {
+      await this.leaveChannel()
+      // You might want to automatically rejoin here
+    }
+  }
+
+  /** Toggle mic mute/unmute */
+  public async toggleMicrophone(): Promise<boolean> {
+    if (!this.AgoraRTC) return true
+
+    try {
+      if (!this.micTrack) {
+        // Create new mic track
+        this.micTrack = await this.AgoraRTC.createMicrophoneAudioTrack({
+          AEC: true,  // Acoustic Echo Cancellation
+          ANS: true,  // Automatic Noise Suppression
+        })
+        console.log('✅ Mic track created')
+
+        // Publish if connected to a channel
+        if (this.client.connectionState === 'CONNECTED') {
+          await this.client.publish(this.micTrack)
+          console.log('📢 Mic published to channel')
+        }
+        return false // unmuted
+      }
+
+      // Toggle mute state
+      const newMuteState = !this.micTrack.muted
+      await this.micTrack.setMuted(newMuteState)
+      console.log('🎙️ Mic state:', newMuteState ? 'muted' : 'unmuted')
+      return newMuteState
+    } catch (error) {
+      console.error('❌ Error toggling microphone:', error)
+      return true
+    }
+  }
+
+  public async toggleCamera(): Promise<boolean> {
+    // Camera functionality can be implemented similarly
+    return true
+  }
+
+  public async joinChannel(channel: string, uid: string, realmId: string): Promise<void> {
+    if (typeof window === 'undefined') return
+    
+    // Clear any pending join operations
+    if (this.channelTimeout) {
+      clearTimeout(this.channelTimeout)
+      this.channelTimeout = null
     }
 
-    await this.micTrack.setMuted(!this.micTrack.muted)
-    console.log('🎙️ Mic mute toggled:', this.micTrack.muted)
-    return this.micTrack.muted
-  } catch (err) {
-    console.error('❌ Error toggling mic:', err)
-    return true
-  }
-}
+    // Don't rejoin the same channel
+    if (channel === this.currentChannel) return
 
-  public async toggleCamera() {
-    return true
-  }
-
-  public playVideoTrackAtElementId(_elementId: string) {
-    // No-op
-  }
-
-  public async joinChannel(channel: string, uid: string, realmId: string) {
-    if (typeof window === 'undefined') return
-    if (this.channelTimeout) clearTimeout(this.channelTimeout)
-
-    this.channelTimeout = setTimeout(async () => {
-      if (channel === this.currentChannel) return
-
-      const unique = this.hash(`${realmId}-${channel}`)
-      const token = await generateToken(unique)
-      if (!token) return
-
-      if (this.client.connectionState === 'CONNECTED') await this.client.leave()
-      this.resetRemoteUsers()
-
-      await this.client.join(process.env.NEXT_PUBLIC_AGORA_APP_ID!, unique, token, uid)
-      this.currentChannel = channel
-
-      console.log('✅ Joined channel:', channel)
-
-      if (!this.micTrack) {
-        await this.toggleMicrophone() // auto enable mic if not set
+    try {
+      const uniqueChannelId = this.hash(`${realmId}-${channel}`)
+      const token = await generateToken(uniqueChannelId)
+      
+      if (!token) {
+        throw new Error('Failed to generate token')
       }
 
-      if (this.micTrack && !this.micTrack.muted) {
-        await this.client.publish([this.micTrack as ILocalTrack])
+      // Leave current channel if connected
+      if (this.client.connectionState === 'CONNECTED') {
+        await this.client.leave()
+        this.resetRemoteUsers()
+      }
+
+      // Join new channel with token
+      await this.client.join(
+        process.env.NEXT_PUBLIC_AGORA_APP_ID!,
+        uniqueChannelId,
+        token,
+        uid
+      )
+      
+      this.currentChannel = channel
+      console.log('✅ Successfully joined channel:', channel)
+
+      // Handle local audio track
+      if (!this.micTrack) {
+        await this.toggleMicrophone() // Auto-enable mic if not set
+      } else if (!this.micTrack.muted && !this.micTrack.isPlaying) {
+        await this.client.publish(this.micTrack)
         console.log('📢 Mic republished after channel join')
       }
-    }, 1000)
+    } catch (error) {
+      console.error('❌ Failed to join channel:', error)
+      throw error
+    }
   }
 
-  public async leaveChannel() {
+  public async leaveChannel(): Promise<void> {
     if (typeof window === 'undefined') return
-    if (this.channelTimeout) clearTimeout(this.channelTimeout)
+    
+    // Clear any pending operations
+    if (this.channelTimeout) {
+      clearTimeout(this.channelTimeout)
+      this.channelTimeout = null
+    }
 
-    this.channelTimeout = setTimeout(async () => {
-      if (this.currentChannel === '') return
-      if (this.client.connectionState === 'CONNECTED') await this.client.leave()
+    try {
+      if (this.client.connectionState === 'CONNECTED') {
+        // Unpublish tracks first
+        if (this.micTrack) {
+          await this.client.unpublish(this.micTrack)
+        }
+        
+        await this.client.leave()
+      }
+      
       this.currentChannel = ''
       this.resetRemoteUsers()
-      console.log('👋 Left channel')
-    }, 1000)
-  }
-
-  public destroy() {
-    if (this.micTrack) {
-      this.micTrack.stop()
-      this.micTrack.close()
+      console.log('👋 Successfully left channel')
+    } catch (error) {
+      console.error('❌ Error leaving channel:', error)
+      throw error
     }
-    this.micTrack = null
   }
 
-  private resetRemoteUsers() {
+  public async destroy(): Promise<void> {
+    try {
+      await this.leaveChannel()
+      
+      // Clean up local tracks
+      if (this.micTrack) {
+        this.micTrack.stop()
+        this.micTrack.close()
+        this.micTrack = null
+      }
+      
+      if (this.cameraTrack) {
+        this.cameraTrack.stop()
+        this.cameraTrack.close()
+        this.cameraTrack = null
+      }
+      
+      console.log('🧹 Voice chat destroyed')
+    } catch (error) {
+      console.error('❌ Error during cleanup:', error)
+    }
+  }
+
+  private resetRemoteUsers(): void {
     this.remoteUsers = {}
     signal.emit('reset-users')
   }
 
-  private hash(src: string) {
+  private hash(src: string): string {
     return createHash('md5').update(src).digest('hex').substring(0, 16)
+  }
+
+  // Additional helper methods
+  public getCurrentChannel(): string {
+    return this.currentChannel
+  }
+
+  public getRemoteUsers(): IAgoraRTCRemoteUser[] {
+    return Object.values(this.remoteUsers)
+  }
+
+  public getMicrophoneState(): boolean {
+    return this.micTrack?.muted ?? true
   }
 }
 
-export const videoChat = typeof window !== 'undefined' ? new VoiceChat() : ({} as VoiceChat)
+export const voiceChat = typeof window !== 'undefined' ? new VoiceChat() : ({} as VoiceChat)

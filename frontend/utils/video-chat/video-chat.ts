@@ -41,6 +41,7 @@ export class VoiceChat {
   }
 
   private onUserJoined = (user: IAgoraRTCRemoteUser) => {
+    console.log('✅ User joined:', user.uid)
     this.remoteUsers[user.uid] = user
     signal.emit('user-info-updated', user)
   }
@@ -50,11 +51,20 @@ export class VoiceChat {
     mediaType: 'audio' | 'video' | 'datachannel',
     _cfg?: IDataChannelConfig,
   ) => {
+    console.log('📡 User published:', user.uid, mediaType)
     if (mediaType !== 'audio') return
 
     this.remoteUsers[user.uid] = user
     await this.client.subscribe(user, mediaType)
-    user.audioTrack?.play()
+    console.log('🔊 Subscribed to audio from:', user.uid)
+
+    if (user.audioTrack) {
+      user.audioTrack.play()
+      console.log('▶️ Playing audio track')
+    } else {
+      console.warn('❌ No audioTrack found for user', user.uid)
+    }
+
     signal.emit('user-info-updated', user)
   }
 
@@ -77,8 +87,9 @@ export class VoiceChat {
         this.micTrack = await AgoraRTC.createMicrophoneAudioTrack()
         console.log('✅ Mic track created:', this.micTrack)
 
-        // ❌ Don’t play own mic locally
-        // this.micTrack.play() // ← disabled
+        if (this.micTrack) {
+          this.micTrack.play()
+        }
 
         if (this.client.connectionState === 'CONNECTED') {
           await this.client.publish([this.micTrack as ILocalTrack])
@@ -122,6 +133,10 @@ export class VoiceChat {
       this.currentChannel = channel
 
       console.log('✅ Joined channel:', channel)
+
+      if (!this.micTrack) {
+        await this.toggleMicrophone() // auto enable mic if not set
+      }
 
       if (this.micTrack && !this.micTrack.muted) {
         await this.client.publish([this.micTrack as ILocalTrack])

@@ -66,23 +66,22 @@ export class VoiceChat {
     signal.emit('user-left', user)
   }
 
+  /** Toggle mic mute/unmute */
   public async toggleMicrophone() {
     const AgoraRTC = typeof window !== 'undefined' ? require('agora-rtc-sdk-ng') : null
     if (!AgoraRTC) return true
 
     try {
       if (!this.micTrack) {
-        const mic = await AgoraRTC.createMicrophoneAudioTrack()
-        this.micTrack = mic
-        console.log('✅ Mic track created:', mic)
+        this.micTrack = await AgoraRTC.createMicrophoneAudioTrack()
+        console.log('✅ Mic track created:', this.micTrack)
 
-        mic.play() // ✅ Safe to call now
+        // ❌ Don't play local mic — we don’t want to hear our own voice
 
         if (this.client.connectionState === 'CONNECTED') {
-          await this.client.publish([mic])
+          await this.client.publish([this.micTrack])
           console.log('✅ Mic published to channel')
         }
-
         return false // unmuted
       }
 

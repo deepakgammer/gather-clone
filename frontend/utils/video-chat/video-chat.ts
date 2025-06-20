@@ -108,32 +108,27 @@ export class VoiceChat {
     console.log('⚠️ Token expired')
     if (this.currentChannel) {
       await this.leaveChannel()
-      // You might want to automatically rejoin here
     }
   }
 
-  /** Toggle mic mute/unmute */
   public async toggleMicrophone(): Promise<boolean> {
     if (!this.AgoraRTC) return true
 
     try {
       if (!this.micTrack) {
-        // Create new mic track
         this.micTrack = await this.AgoraRTC.createMicrophoneAudioTrack({
-          AEC: true,  // Acoustic Echo Cancellation
-          ANS: true,  // Automatic Noise Suppression
+          AEC: true,
+          ANS: true,
         })
         console.log('✅ Mic track created')
 
-        // Publish if connected to a channel
         if (this.client.connectionState === 'CONNECTED') {
           await this.client.publish(this.micTrack)
           console.log('📢 Mic published to channel')
         }
-        return false // unmuted
+        return false
       }
 
-      // Toggle mute state
       const newMuteState = !this.micTrack.muted
       await this.micTrack.setMuted(newMuteState)
       console.log('🎙️ Mic state:', newMuteState ? 'muted' : 'unmuted')
@@ -145,20 +140,17 @@ export class VoiceChat {
   }
 
   public async toggleCamera(): Promise<boolean> {
-    // Camera functionality can be implemented similarly
     return true
   }
 
   public async joinChannel(channel: string, uid: string, realmId: string): Promise<void> {
     if (typeof window === 'undefined') return
     
-    // Clear any pending join operations
     if (this.channelTimeout) {
       clearTimeout(this.channelTimeout)
       this.channelTimeout = null
     }
 
-    // Don't rejoin the same channel
     if (channel === this.currentChannel) return
 
     try {
@@ -169,13 +161,11 @@ export class VoiceChat {
         throw new Error('Failed to generate token')
       }
 
-      // Leave current channel if connected
       if (this.client.connectionState === 'CONNECTED') {
         await this.client.leave()
         this.resetRemoteUsers()
       }
 
-      // Join new channel with token
       await this.client.join(
         process.env.NEXT_PUBLIC_AGORA_APP_ID!,
         uniqueChannelId,
@@ -186,9 +176,8 @@ export class VoiceChat {
       this.currentChannel = channel
       console.log('✅ Successfully joined channel:', channel)
 
-      // Handle local audio track
       if (!this.micTrack) {
-        await this.toggleMicrophone() // Auto-enable mic if not set
+        await this.toggleMicrophone()
       } else if (!this.micTrack.muted && !this.micTrack.isPlaying) {
         await this.client.publish(this.micTrack)
         console.log('📢 Mic republished after channel join')
@@ -202,7 +191,6 @@ export class VoiceChat {
   public async leaveChannel(): Promise<void> {
     if (typeof window === 'undefined') return
     
-    // Clear any pending operations
     if (this.channelTimeout) {
       clearTimeout(this.channelTimeout)
       this.channelTimeout = null
@@ -210,11 +198,9 @@ export class VoiceChat {
 
     try {
       if (this.client.connectionState === 'CONNECTED') {
-        // Unpublish tracks first
         if (this.micTrack) {
           await this.client.unpublish(this.micTrack)
         }
-        
         await this.client.leave()
       }
       
@@ -231,7 +217,6 @@ export class VoiceChat {
     try {
       await this.leaveChannel()
       
-      // Clean up local tracks
       if (this.micTrack) {
         this.micTrack.stop()
         this.micTrack.close()
@@ -259,7 +244,6 @@ export class VoiceChat {
     return createHash('md5').update(src).digest('hex').substring(0, 16)
   }
 
-  // Additional helper methods
   public getCurrentChannel(): string {
     return this.currentChannel
   }
@@ -273,4 +257,5 @@ export class VoiceChat {
   }
 }
 
-export const voiceChat = typeof window !== 'undefined' ? new VoiceChat() : ({} as VoiceChat)
+// Export as default to avoid naming inconsistencies
+export default typeof window !== 'undefined' ? new VoiceChat() : ({} as VoiceChat)

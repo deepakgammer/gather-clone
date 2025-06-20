@@ -76,7 +76,10 @@ export class VoiceChat {
         this.micTrack = await AgoraRTC.createMicrophoneAudioTrack()
         console.log('✅ Mic track created:', this.micTrack)
 
-        this.micTrack.play() // optional: plays back mic locally
+        
+  	if (this.micTrack) {
+           this.micTrack.play() // ✅ Safe check added
+ 		 }
         if (this.client.connectionState === 'CONNECTED') {
           await this.client.publish([this.micTrack])
           console.log('✅ Mic published to channel')

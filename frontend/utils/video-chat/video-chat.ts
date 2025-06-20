@@ -66,31 +66,31 @@ export class VoiceChat {
     signal.emit('user-left', user)
   }
 
-  /** Toggle mic mute/unmute */
   public async toggleMicrophone() {
     const AgoraRTC = typeof window !== 'undefined' ? require('agora-rtc-sdk-ng') : null
     if (!AgoraRTC) return true
 
     try {
       if (!this.micTrack) {
-        this.micTrack = await AgoraRTC.createMicrophoneAudioTrack()
-        console.log(' Mic track created:', this.micTrack)
+        const mic = await AgoraRTC.createMicrophoneAudioTrack()
+        this.micTrack = mic
+        console.log('✅ Mic track created:', mic)
 
-        this.micTrack.play()
+        mic.play() // ✅ Safe to call now
 
         if (this.client.connectionState === 'CONNECTED') {
-          await this.client.publish([this.micTrack])
-          console.log(' Mic published to channel')
+          await this.client.publish([mic])
+          console.log('✅ Mic published to channel')
         }
 
-        return false // mic is unmuted
+        return false // unmuted
       }
 
       await this.micTrack.setMuted(!this.micTrack.muted)
-      console.log(' Mic mute toggled:', this.micTrack.muted)
+      console.log('🎙️ Mic mute toggled:', this.micTrack.muted)
       return this.micTrack.muted
     } catch (err) {
-      console.error(' Error toggling mic:', err)
+      console.error('❌ Error toggling mic:', err)
       return true
     }
   }
@@ -120,11 +120,11 @@ export class VoiceChat {
       await this.client.join(process.env.NEXT_PUBLIC_AGORA_APP_ID!, unique, token, uid)
       this.currentChannel = channel
 
-      console.log(' Joined channel:', channel)
+      console.log('✅ Joined channel:', channel)
 
       if (this.micTrack && !this.micTrack.muted) {
         await this.client.publish([this.micTrack])
-        console.log(' Mic republished after channel join')
+        console.log('📢 Mic republished after channel join')
       }
     }, 1000)
   }
@@ -138,7 +138,7 @@ export class VoiceChat {
       if (this.client.connectionState === 'CONNECTED') await this.client.leave()
       this.currentChannel = ''
       this.resetRemoteUsers()
-      console.log(' Left channel')
+      console.log('👋 Left channel')
     }, 1000)
   }
 

@@ -74,23 +74,23 @@ export class VoiceChat {
     try {
       if (!this.micTrack) {
         this.micTrack = await AgoraRTC.createMicrophoneAudioTrack()
-        console.log('✅ Mic track created:', this.micTrack)
+        console.log(' Mic track created:', this.micTrack)
 
         this.micTrack.play()
 
         if (this.client.connectionState === 'CONNECTED') {
           await this.client.publish([this.micTrack])
-          console.log('✅ Mic published to channel')
+          console.log(' Mic published to channel')
         }
 
-        return false // unmuted
+        return false // mic is unmuted
       }
 
       await this.micTrack.setMuted(!this.micTrack.muted)
-      console.log('🎙️ Mic mute toggled:', this.micTrack.muted)
+      console.log(' Mic mute toggled:', this.micTrack.muted)
       return this.micTrack.muted
     } catch (err) {
-      console.error('❌ Error toggling mic:', err)
+      console.error(' Error toggling mic:', err)
       return true
     }
   }
@@ -120,11 +120,11 @@ export class VoiceChat {
       await this.client.join(process.env.NEXT_PUBLIC_AGORA_APP_ID!, unique, token, uid)
       this.currentChannel = channel
 
-      console.log('✅ Joined channel:', channel)
+      console.log(' Joined channel:', channel)
 
       if (this.micTrack && !this.micTrack.muted) {
         await this.client.publish([this.micTrack])
-        console.log('📢 Mic republished after channel join')
+        console.log(' Mic republished after channel join')
       }
     }, 1000)
   }
@@ -138,7 +138,7 @@ export class VoiceChat {
       if (this.client.connectionState === 'CONNECTED') await this.client.leave()
       this.currentChannel = ''
       this.resetRemoteUsers()
-      console.log('👋 Left channel')
+      console.log(' Left channel')
     }, 1000)
   }
 

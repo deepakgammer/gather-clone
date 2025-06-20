@@ -10,6 +10,7 @@ import type {
   ICameraVideoTrack,
   IAgoraRTCRemoteUser,
   IDataChannelConfig,
+  ILocalTrack,
 } from 'agora-rtc-sdk-ng'
 
 export class VoiceChat {
@@ -76,10 +77,11 @@ export class VoiceChat {
         this.micTrack = await AgoraRTC.createMicrophoneAudioTrack()
         console.log('✅ Mic track created:', this.micTrack)
 
-        // ❌ Don't play local mic — we don’t want to hear our own voice
+        // ❌ Don’t play own mic locally
+        // this.micTrack.play() // ← disabled
 
         if (this.client.connectionState === 'CONNECTED') {
-          await this.client.publish([this.micTrack])
+          await this.client.publish([this.micTrack as ILocalTrack])
           console.log('✅ Mic published to channel')
         }
         return false // unmuted
@@ -122,7 +124,7 @@ export class VoiceChat {
       console.log('✅ Joined channel:', channel)
 
       if (this.micTrack && !this.micTrack.muted) {
-        await this.client.publish([this.micTrack])
+        await this.client.publish([this.micTrack as ILocalTrack])
         console.log('📢 Mic republished after channel join')
       }
     }, 1000)

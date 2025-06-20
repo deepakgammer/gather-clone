@@ -79,33 +79,32 @@ export class VoiceChat {
 
   /** Toggle mic mute/unmute */
   public async toggleMicrophone() {
-    const AgoraRTC = typeof window !== 'undefined' ? require('agora-rtc-sdk-ng') : null
-    if (!AgoraRTC) return true
+  const AgoraRTC = typeof window !== 'undefined' ? require('agora-rtc-sdk-ng') : null
+  if (!AgoraRTC) return true
 
-    try {
-      if (!this.micTrack) {
-        this.micTrack = await AgoraRTC.createMicrophoneAudioTrack()
-        console.log('✅ Mic track created:', this.micTrack)
+  try {
+    if (!this.micTrack) {
+      this.micTrack = await AgoraRTC.createMicrophoneAudioTrack()
+      console.log('✅ Mic track created:', this.micTrack)
 
-        if (this.micTrack) {
-          this.micTrack.play()
-        }
+      // ❌ DO NOT PLAY micTrack LOCALLY
+      // this.micTrack.play() ← REMOVE THIS LINE
 
-        if (this.client.connectionState === 'CONNECTED') {
-          await this.client.publish([this.micTrack as ILocalTrack])
-          console.log('✅ Mic published to channel')
-        }
-        return false // unmuted
+      if (this.client.connectionState === 'CONNECTED') {
+        await this.client.publish([this.micTrack as ILocalTrack])
+        console.log('✅ Mic published to channel')
       }
-
-      await this.micTrack.setMuted(!this.micTrack.muted)
-      console.log('🎙️ Mic mute toggled:', this.micTrack.muted)
-      return this.micTrack.muted
-    } catch (err) {
-      console.error('❌ Error toggling mic:', err)
-      return true
+      return false // unmuted
     }
+
+    await this.micTrack.setMuted(!this.micTrack.muted)
+    console.log('🎙️ Mic mute toggled:', this.micTrack.muted)
+    return this.micTrack.muted
+  } catch (err) {
+    console.error('❌ Error toggling mic:', err)
+    return true
   }
+}
 
   public async toggleCamera() {
     return true

@@ -1,63 +1,60 @@
+/* ─────────────────────────────────────────────
+   1.  .env FIRST, before any other import that might need env vars
+───────────────────────────────────────────────*/
+require('dotenv').config()          // ✅ already correct
+
 import express from 'express'
 import cors from 'cors'
 import http from 'http'
 import { Server as SocketIOServer } from 'socket.io'
-import { sockets } from './sockets/sockets'
+
+/* If routes or sockets files import { supabase } they must import it
+   from  "../supabaseAdmin" (service‑role) not from anon client */
 import routes from './routes/routes'
-import { supabase } from './supabase'
-import { sessionManager } from './session'
+import { sockets } from './sockets/sockets'   // <- sockets.ts should now use supabaseAdmin
 
-require('dotenv').config()
+/* ─────────────────────────────────────────────
+   Environment variables
+───────────────────────────────────────────────*/
+const FRONTEND = process.env.FRONTEND_URL || 'http://localhost:3000'
+const PORT = Number(process.env.PORT) || 4000   // keep 4000 for local
 
+/* ─────────────────────────────────────────────
+   Express + CORS setup
+───────────────────────────────────────────────*/
 const app = express()
+
+app.use(
+  cors({
+    origin: FRONTEND,
+    credentials: true,
+  })
+)
+
+/* ─────────────────────────────────────────────
+   HTTP + Socket.IO server
+───────────────────────────────────────────────*/
 const server = http.createServer(app)
 
-app.use(cors({
-    origin: process.env.FRONTEND_URL
-}))
-
-// Initialize Socket.IO server
 const io = new SocketIOServer(server, {
   cors: {
-    origin: process.env.FRONTEND_URL
-  }
+    origin: FRONTEND,
+    credentials: true,
+  },
+  transports: ['websocket', 'polling'],
 })
 
+/* REST routes and socket wiring */
 app.use(routes())
-
 sockets(io)
 
-function onRealmUpdate(payload: any) {
-    const id = payload.new.id
-    let refresh = false
-    if (JSON.stringify(payload.new.map_data) !== JSON.stringify(payload.old.map_data)) {
-        refresh = true
-    }
-    if (payload.new.share_id !== payload.old.share_id) {
-        refresh = true
-    }
-    if (payload.new.only_owner) {
-        refresh = true
-    }
-    if (refresh) {
-        sessionManager.terminateSession(id, "This realm has been changed by the owner.")
-    }
-}
-
-function onRealmDelete(payload: any) {
-    sessionManager.terminateSession(payload.old.id, "This realm is no longer available.")
-}
-
-supabase
-    .channel('realms')
-    .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'realms' }, onRealmUpdate)
-    .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'realms' }, onRealmDelete)
-    .subscribe()
-
-const PORT = process.env.PORT || 3001
+/* ─────────────────────────────────────────────
+   Launch
+───────────────────────────────────────────────*/
 server.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}.`)
+  console.log(`Socket‑server ⚡  running on http://localhost:${PORT}`)
+  console.log(`CORS allowed origin → ${FRONTEND}`)
 })
 
-
+/* Export if helpers need a live io instance */
 export { io }

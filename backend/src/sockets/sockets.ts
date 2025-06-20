@@ -1,226 +1,199 @@
+/* ✅ UPDATED sockets.ts — allows all users to join the fixed realm */
+
 import { Server } from 'socket.io'
-import { JoinRealm, Disconnect, OnEventCallback, MovePlayer, Teleport, ChangedSkin, NewMessage } from './socket-types'
+import {
+  JoinRealm,
+  Disconnect,
+  OnEventCallback,
+  MovePlayer,
+  Teleport,
+  ChangedSkin,
+  NewMessage,
+} from './socket-types'
 import { z } from 'zod'
+import jwt from 'jsonwebtoken'
 import { supabase } from '../supabase'
 import { users } from '../Users'
 import { sessionManager } from '../session'
-import { removeExtraSpaces } from '../utils'
+import { removeExtraSpaces, formatEmailToName } from '../utils'
 import { kickPlayer } from './helpers'
-import { formatEmailToName } from '../utils'
+
+type JWTPayload = {
+  sub: string
+  email?: string
+  iat?: number
+  exp?: number
+}
 
 const joiningInProgress = new Set<string>()
 
 function protectConnection(io: Server) {
-    io.use(async (socket, next) => {
-        const access_token = socket.handshake.headers['authorization']?.split(' ')[1]
-        const uid = socket.handshake.query.uid as string
-        if (!access_token || !uid) {
-            const error = new Error("Invalid access token or uid.")
-            return next(error)
-        } else {
-            const { data: user, error: error } = await supabase.auth.getUser(access_token)
-            if (error) {
-                return next(new Error("Invalid access token."))
-            }
-            if (!user || user.user.id !== uid) {
-                return next(new Error("Invalid uid."))
-            }
-            users.addUser(uid, user.user)
-            next()
-        }
-    })
+  io.use((socket, next) => {
+    const { token, uid } = socket.handshake.auth as {
+      token?: string
+      uid?: string
+    }
+
+    if (!token || !uid) return next(new Error('Missing auth token or uid'))
+
+    try {
+      const payload = jwt.decode(token) as JWTPayload | null
+      if (!payload) throw new Error('Unable to decode JWT')
+
+      const now = Math.floor(Date.now() / 1000)
+      if (payload.exp && payload.exp < now) throw new Error('JWT expired')
+      if (payload.sub !== uid) throw new Error('UID mismatch in JWT')
+
+      users.addUser(uid, {
+        id: uid,
+        user_metadata: { email: payload.email ?? '' },
+      } as any)
+
+      next()
+    } catch (err: any) {
+      console.error('JWT validation failed:', err.message)
+      next(new Error('Invalid token or uid'))
+    }
+  })
 }
 
-
 export function sockets(io: Server) {
-    protectConnection(io)
+  protectConnection(io)
 
-    // Handle a connection
-    io.on('connection', (socket) => {
+  io.on('connection', (socket) => {
+    const uid = socket.handshake.auth.uid as string
 
-        function on(eventName: string, schema: z.ZodTypeAny, callback: OnEventCallback) {
-            socket.on(eventName, (data: any) => {
-                const success = schema.safeParse(data).success
-                if (!success) return
+    function on(eventName: string, schema: z.ZodTypeAny, callback: OnEventCallback) {
+      socket.on(eventName, (data: any) => {
+        if (!schema.safeParse(data).success) return
+        const session = sessionManager.getPlayerSession(uid)
+        if (!session) return
+        callback({ session, data })
+      })
+    }
 
-                const session = sessionManager.getPlayerSession(socket.handshake.query.uid as string)
-                if (!session) {
-                    return
-                }
-                callback({ session, data })
-            })
+    function emit(eventName: string, data: any) {
+      const session = sessionManager.getPlayerSession(uid)
+      if (!session) return
+      const room = session.getPlayerRoom(uid)
+      session.getPlayersInRoom(room).forEach((p) => {
+        if (p.socketId !== socket.id) io.to(p.socketId).emit(eventName, data)
+      })
+    }
+
+    function emitToSocketIds(socketIds: string[], eventName: string, data: any) {
+      socketIds.forEach((sid) => io.to(sid).emit(eventName, data))
+    }
+
+    socket.on('joinRealm', async (realmData: z.infer<typeof JoinRealm>) => {
+      const rejectJoin = (reason: string) => {
+        socket.emit('failedToJoinRoom', reason)
+        joiningInProgress.delete(uid)
+      }
+
+      if (!JoinRealm.safeParse(realmData).success) return rejectJoin('Invalid request data.')
+      if (joiningInProgress.has(uid)) return rejectJoin('Already joining a space.')
+      joiningInProgress.add(uid)
+
+      const { data: realm, error } = await supabase
+        .from('realms')
+        .select('owner_id, map_data')
+        .eq('id', realmData.realmId)
+        .single()
+
+      if (error || !realm) {
+        console.warn('⚠️ Realm not found or error:', error?.message)
+        return rejectJoin('Space not found.')
+      }
+
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .select('skin')
+        .eq('id', uid)
+        .single()
+
+      if (profileError) return rejectJoin('Failed to get profile.')
+
+      const join = () => {
+        if (!sessionManager.getSession(realmData.realmId)) {
+          sessionManager.createSession(realmData.realmId, realm.map_data)
         }
 
-        function emit(eventName: string, data: any) {
-            const session = sessionManager.getPlayerSession(socket.handshake.query.uid as string)
-            if (!session) {
-                return
-            }
+        const existing = sessionManager.getPlayerSession(uid)
+        if (existing) kickPlayer(uid, 'You have logged in from another location.')
 
-            const room = session.getPlayerRoom(socket.handshake.query.uid as string)
-            const players = session.getPlayersInRoom(room)
+        const user = users.getUser(uid)!
+        const username = formatEmailToName(user.user_metadata.email)
 
-            for (const player of players) {
-                if (player.socketId === socket.id) continue
+        sessionManager.addPlayerToSession(
+          socket.id,
+          realmData.realmId,
+          uid,
+          username,
+          profile.skin
+        )
 
-                io.to(player.socketId).emit(eventName, data)
-            }
-        }
+        const player = sessionManager.getPlayerSession(uid).getPlayer(uid)
+        socket.join(realmData.realmId)
+        socket.emit('joinedRealm')
+        emit('playerJoinedRoom', player)
+        joiningInProgress.delete(uid)
+      }
 
-        function emitToSocketIds(socketIds: string[], eventName: string, data: any) {
-            for (const socketId of socketIds) {
-                io.to(socketId).emit(eventName, data)
-            }
-        }
-
-        socket.on('joinRealm', async (realmData: z.infer<typeof JoinRealm>) => {
-            const uid = socket.handshake.query.uid as string
-            const rejectJoin = (reason: string) => {
-                socket.emit('failedToJoinRoom', reason)
-                joiningInProgress.delete(uid)
-            }
-
-            if (JoinRealm.safeParse(realmData).success === false) {
-                return rejectJoin('Invalid request data.')
-            }
-
-            if (joiningInProgress.has(uid)) {
-                rejectJoin('Already joining a space.')
-            }
-            joiningInProgress.add(uid)
-
-            const session = sessionManager.getSession(realmData.realmId)
-            if (session) {
-                const playerCount = session.getPlayerCount()
-                if (playerCount >= 30) {
-                    return rejectJoin("Space is full. It's 30 players max.")
-                } 
-            }
-
-            const { data, error } = await supabase.from('realms').select('owner_id, share_id, map_data, only_owner').eq('id', realmData.realmId).single()
-
-            if (error || !data) {
-                return rejectJoin('Space not found.')
-            }
-            const { data: profile, error: profileError } = await supabase.from('profiles').select('skin').eq('id', uid).single()
-            if (profileError) {
-                return rejectJoin('Failed to get profile.')
-            }
-
-            const realm = data
-
-            const join = async () => {
-                if (!sessionManager.getSession(realmData.realmId)) {
-                    sessionManager.createSession(realmData.realmId, data.map_data)
-                }
-
-                const currentSession = sessionManager.getPlayerSession(uid)
-                if (currentSession) {
-                    kickPlayer(uid, 'You have logged in from another location.')
-                }
-
-                const user = users.getUser(uid)!
-                const username = formatEmailToName(user.user_metadata.email)
-                sessionManager.addPlayerToSession(socket.id, realmData.realmId, uid, username, profile.skin)
-                const newSession = sessionManager.getPlayerSession(uid)
-                const player = newSession.getPlayer(uid)   
-
-                socket.join(realmData.realmId)
-                socket.emit('joinedRealm')
-                emit('playerJoinedRoom', player)
-                joiningInProgress.delete(uid)
-            }
-
-            if (realm.owner_id === socket.handshake.query.uid) {
-                return join()
-            }
-
-            if (realm.only_owner) {
-                return rejectJoin('This realm is private right now. Come back later!')
-            }
-
-            if (realm.share_id === realmData.shareId) {
-                return join()
-            } else {
-                return rejectJoin('The share link has been changed.')
-            }
-        })
-
-        // Handle a disconnection
-        on('disconnect', Disconnect, ({ session, data }) => {
-            const uid = socket.handshake.query.uid as string
-            const socketIds = sessionManager.getSocketIdsInRoom(session.id, session.getPlayerRoom(uid))
-            const success = sessionManager.logOutBySocketId(socket.id)
-            if (success) {
-                emitToSocketIds(socketIds, 'playerLeftRoom', uid)
-                users.removeUser(uid)
-            }
-        })
-
-        on('movePlayer', MovePlayer, ({ session, data }) => {  
-            const player = session.getPlayer(socket.handshake.query.uid as string)
-            const changedPlayers = session.movePlayer(player.uid, data.x, data.y)
-
-            emit('playerMoved', {
-                uid: player.uid,
-                x: player.x,
-                y: player.y
-            })
-
-            for (const uid of changedPlayers) {
-                const changedPlayerData = session.getPlayer(uid)
-
-                emitToSocketIds([changedPlayerData.socketId], 'proximityUpdate', {
-                    proximityId: changedPlayerData.proximityId
-                })
-            }
-        })  
-
-        on('teleport', Teleport, ({ session, data }) => {
-            const uid = socket.handshake.query.uid as string
-            const player = session.getPlayer(uid)
-            if (player.room !== data.roomIndex) {
-                emit('playerLeftRoom', uid)
-                const session = sessionManager.getPlayerSession(uid)
-                const changedPlayers = session.changeRoom(uid, data.roomIndex, data.x, data.y)
-                emit('playerJoinedRoom', player)
-
-                for (const uid of changedPlayers) {
-                    const changedPlayerData = session.getPlayer(uid)
-
-                    emitToSocketIds([changedPlayerData.socketId], 'proximityUpdate', {
-                        proximityId: changedPlayerData.proximityId
-                    })
-                }
-            } else {
-                const changedPlayers = session.movePlayer(player.uid, data.x, data.y)
-                emit('playerTeleported', { uid, x: player.x, y: player.y })
-
-                for (const uid of changedPlayers) {
-                    const changedPlayerData = session.getPlayer(uid)
-
-                    emitToSocketIds([changedPlayerData.socketId], 'proximityUpdate', {
-                        proximityId: changedPlayerData.proximityId
-                    })
-                }
-            }
-        })
-
-        on('changedSkin', ChangedSkin, ({ session, data }) => {
-            const uid = socket.handshake.query.uid as string
-            const player = session.getPlayer(uid)
-            player.skin = data
-            emit('playerChangedSkin', { uid, skin: player.skin })
-        })
-
-        on('sendMessage', NewMessage, ({ session, data }) => {
-            // cannot exceed 300 characters
-            if (data.length > 300 || data.trim() === '') return
-
-            const message = removeExtraSpaces(data)
-
-            const uid = socket.handshake.query.uid as string
-            emit('receiveMessage', { uid, message })
-        })
+      join()
     })
+
+    on('disconnect', Disconnect, ({ session }) => {
+      const ids = sessionManager.getSocketIdsInRoom(session.id, session.getPlayerRoom(uid))
+      if (sessionManager.logOutBySocketId(socket.id)) {
+        emitToSocketIds(ids, 'playerLeftRoom', uid)
+        users.removeUser(uid)
+      }
+    })
+
+    on('movePlayer', MovePlayer, ({ session, data }) => {
+      const changed = session.movePlayer(uid, data.x, data.y)
+      const player = session.getPlayer(uid)
+
+      emit('playerMoved', { uid, x: player.x, y: player.y })
+
+      changed.forEach((cid) => {
+        const cp = session.getPlayer(cid)
+        emitToSocketIds([cp.socketId], 'proximityUpdate', { proximityId: cp.proximityId })
+      })
+    })
+
+    on('teleport', Teleport, ({ session, data }) => {
+      const player = session.getPlayer(uid)
+
+      if (player.room !== data.roomIndex) {
+        emit('playerLeftRoom', uid)
+        const changed = session.changeRoom(uid, data.roomIndex, data.x, data.y)
+        emit('playerJoinedRoom', player)
+
+        changed.forEach((cid) => {
+          const cp = session.getPlayer(cid)
+          emitToSocketIds([cp.socketId], 'proximityUpdate', { proximityId: cp.proximityId })
+        })
+      } else {
+        const changed = session.movePlayer(uid, data.x, data.y)
+        emit('playerTeleported', { uid, x: player.x, y: player.y })
+
+        changed.forEach((cid) => {
+          const cp = session.getPlayer(cid)
+          emitToSocketIds([cp.socketId], 'proximityUpdate', { proximityId: cp.proximityId })
+        })
+      }
+    })
+
+    on('changedSkin', ChangedSkin, ({ session, data }) => {
+      session.getPlayer(uid).skin = data
+      emit('playerChangedSkin', { uid, skin: data })
+    })
+
+    on('sendMessage', NewMessage, ({ session, data }) => {
+      if (data.length > 300 || data.trim() === '') return
+      emit('receiveMessage', { uid, message: removeExtraSpaces(data) })
+    })
+  })
 }

@@ -1,37 +1,38 @@
-import React from 'react'
-import { VideoCameraSlash, MicrophoneSlash, VideoCamera, Microphone } from '@phosphor-icons/react'
-import { useVideoChat } from '@/app/hooks/useVideoChat'
+'use client'
 
-type MicAndCameraButtonsProps = {
-    
-}
+import React, { useState } from 'react'
+import { Mic, MicOff } from 'lucide-react'
+import { videoChat } from '@/utils/video-chat/video-chat'
 
-const MicAndCameraButtons:React.FC<MicAndCameraButtonsProps> = () => {
+/**
+ * MicAndCameraButtons  (audio‑only version)
+ * -----------------------------------------
+ * • Shows a single mic toggle button.
+ * • No camera toggle, no video track created.
+ */
+const MicAndCameraButtons: React.FC = () => {
+  const [micMuted, setMicMuted] = useState(false)
 
-    const { isCameraMuted, isMicMuted, toggleCamera, toggleMicrophone } = useVideoChat()
-    
+  /* ─── Toggle microphone ─── */
+  const toggleMic = async () => {
+    const muted = await videoChat.toggleMicrophone()
+    setMicMuted(muted)
+  }
 
-    const micClass = `w-6 h-6 ${!isMicMuted ? 'text-[#08D6A0]' : 'text-[#FF2F49]'}`
-    const cameraClass = `w-6 h-6 ${!isCameraMuted ? 'text-[#08D6A0]' : 'text-[#FF2F49]'}`
-    return (
-        <section className='flex flex-row gap-2'>
-            <button 
-                className={`${!isMicMuted ? 'bg-[#2A4B54] hover:bg-[#3b6975]' : 'bg-[#682E44] hover:bg-[#7a3650]'} 
-                p-2 rounded-full animate-colors outline-none`}
-                onClick={toggleMicrophone}
-            >
-                {isMicMuted ? <MicrophoneSlash className={micClass} /> : <Microphone className={micClass} />}
-            </button>
-            <button 
-                className={`${!isCameraMuted ? 'bg-[#2A4B54] hover:bg-[#3b6975]' : 'bg-[#682E44] hover:bg-[#7a3650]'} 
-                p-2 rounded-full animate-colors outline-none`}
-                onClick={toggleCamera}
-            >
-                {isCameraMuted ? <VideoCameraSlash className={cameraClass} /> : <VideoCamera className={cameraClass} />}
-            </button>
-        </section>
-        
-    )
+  return (
+    <div className="flex items-center justify-center gap-4">
+      {/* Mic button */}
+      <button
+        onClick={toggleMic}
+        className={`rounded-full p-3 transition-colors ${
+          micMuted ? 'bg-red-600' : 'bg-emerald-600'
+        } hover:opacity-80`}
+        title={micMuted ? 'Unmute microphone' : 'Mute microphone'}
+      >
+        {micMuted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
+      </button>
+    </div>
+  )
 }
 
 export default MicAndCameraButtons

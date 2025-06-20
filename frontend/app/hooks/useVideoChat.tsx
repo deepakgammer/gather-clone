@@ -1,3 +1,5 @@
+'use client'
+
 import React, { createContext, useContext, ReactNode, useEffect, useState, useMemo, useRef } from 'react'
 import AgoraRTC, { 
     AgoraRTCProvider, 
